@@ -230,6 +230,15 @@ class LocalPro:
         return method(**kwargs)
 
 
-def pro_api(config_path="config/settings.toml") -> LocalPro:
+def local_api(config_path="config/settings.toml") -> LocalPro:
     cfg = load_config(Path(config_path))
     return LocalPro(cfg.data_dir)
+
+
+def pro_api(config_path=None, *, token=None, cache_path=None, upstream=None):
+    from zer0share.cache import CachedPro, load_cache_config
+
+    if config_path is None and Path("config/settings.toml").exists():
+        config_path = "config/settings.toml"
+    config = load_cache_config(config_path, token=token, cache_path=cache_path)
+    return CachedPro(config, upstream=upstream)

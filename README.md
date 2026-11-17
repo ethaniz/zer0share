@@ -1,255 +1,138 @@
 # zer0share
 
-![Python](https://img.shields.io/badge/python-3.11+-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Stars](https://img.shields.io/github/stars/zer0quant/zer0share)
+按请求更新的 Tushare 本地缓存。请求先查本地，只向 Tushare 获取当前股票、当前日期范围中缺失的数据，成功后写入 DuckDB，供下次复用。
 
-A 股、ETF、期货、期权数据本地化管道：基于 [Tushare Pro](https://tushare.pro) 拉取数据，以 Parquet 分区存储，DuckDB 提供快速本地查询，支持增量同步与定时调度。
-
-它和 [zer0factor](https://github.com/zer0quant/zer0factor) 是配套关系：
-
-- `zer0share`：负责本地 A 股数据采集、同步和查询
-- `zer0factor`：负责因子规范、因子生成、预处理、评估和存储
-
-## 为什么用 zer0share？
-
-直接调 Tushare Pro 做研究有两个痛点：每次查询消耗积分，批量回测时 API 限速拖慢迭代。zer0share 把数据落到本地，查询走 DuckDB，既省积分又快。
-
-| | 直接调 Tushare Pro | zer0share 本地查询 |
-|---|---|---|
-| 积分消耗 | 每次请求消耗 | 零消耗 |
-| 网络依赖 | 必须联网 | 离线可用 |
-| 查询速度 | 受 API 限速 | DuckDB 本地毫秒级 |
-| 数据一致性 | 取决于调用时机 | 快照固定，结果可复现 |
-
-## 特性
-
-- **A 股数据**：交易日历、基础信息、日线、复权因子、每日指标、ST、停复牌、涨跌停、股东增减持、指数成分、申万/中信行业、申万行业指数日线
-- **ETF 数据**：ETF 基础信息、日线行情、复权因子、份额规模、持仓组合
-- **期货 & 期权数据**：期货合约、日线、持仓排名、仓单、结算、主连映射；期权合约与日线行情
-- **分钟线（可选）**：接入 RiceQuant 数据源同步股票 / ETF 分钟线
-- **新闻（可选）**：`major_news` 长篇通讯、`news` 快讯，存入 SQLite（去重、断点续跑、标题中文全文检索），可用单独的 Tushare 账号
-- **本地优先存储**：Parquet 分区文件 + DuckDB 元数据，无需数据库服务
-- **Tushare-like 查询**：本地 `pro_api()` 直接返回 DataFrame，不消耗 Tushare 积分
-- **复权行情**：本地 `pro_bar()` 支持不复权、前复权（qfq）和后复权（hfq）
-- **股票池构建**：研究基础池、交易基础池、沪深300/中证500/中证1000等交易池
-- **数据质检**：本地表级质量检查，生成详细报告
-- **自动化运维**：APScheduler 定时同步，Docker 一键部署与回滚，支持企业微信 / 飞书告警（失败立即推送，成功每日汇总一条）
-
-## 安装
-
-前置要求：
-
-- Python 3.11+ 和 [uv](https://github.com/astral-sh/uv)
-- Tushare Pro Token（基础行情需积分 ≥ 2000，部分专题表要求更高，详见[同步指南](docs/guides/SYNC_GUIDE.md)）
-
-```bash
-git clone https://github.com/zer0quant/zer0share.git
-cd zer0share
-uv sync
-```
-
-## 配置
-
-```bash
-cp config/settings.example.toml config/settings.toml
-```
-
-```toml
-[tushare]
-token = "your_tushare_token_here"
-
-[paths]
-data_dir = "data"          # Parquet 存储目录
-db_path = "db/meta.duckdb" # DuckDB 文件路径
-log_path = "logs/pipeline.log"
-
-[scheduler]
-# 每个表单独配置触发时间（HH:MM），完整示例见 config/settings.example.toml
-
-[notifier]
-enabled = false            # 至少启用一个通道后改为 true
-digest_time = "18:10"      # 成功消息每日汇总时间；设为 "" 恢复每次成功都推送
-
-[notifier.wecom]
-enabled = false
-webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY"
-
-[notifier.feishu]
-enabled = false
-webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_KEY"
-```
-
-### 通知与每日汇总
-
-定时调度下的推送规则：
-
-| 情况 | 推送时机 |
-|---|---|
-| 同步失败、未处理的异常、数据质检 warn/fail | 立即推送 |
-| 部分失败（分钟线部分批次、`sw_daily` 失败天数、`index_daily` 单个指数拉取失败等） | 立即推送 |
-| 同步成功 | 不单独推送，每天 `digest_time` 汇总成一条 |
-| 调度器启动 | 立即推送一条 |
-
-每日汇总列出当天各表状态：成功、失败、完成但有告警、未运行（配置了却没跑）、运行中。**每天固定会收到这一条，没收到就说明调度器本身出了问题。**
-
-```
-每日同步汇总 2026-11-07
-成功 30/33｜失败 1｜未运行 1｜有告警 1
-失败：- fut_wsr: RuntimeError: ...
-完成但有告警：- index_daily: ...
-未运行：- opt_daily
-成功：- daily_kline: 日期：20261107｜写入 1 天 / 5300 条记录 ...
-```
-
-汇总状态保存在 `db_path` 同目录的 `digest_state.json`（原子写入），调度器重启不丢；重启前正在运行的表记为“被中断”，若重启时已错过汇总时间，会在启动时补发。CLI 手动执行 `sync` 时不汇总，成功消息照常即时推送。
+无需全量同步，也没有后台调度器。默认查询入口是 `pro_api()`。
 
 ## 快速开始
 
 ```bash
-# 1. 首次同步（建议先用小区间验证 Tushare 权限，再全量回填，详见同步指南）
-uv run python main.py sync --all
-
-# 2. 查看各表同步状态
-uv run python main.py status
-
-# 3. 构建股票池（默认从 2016-01-01 增量构建到今天）
-uv run python main.py build-universe
-
-# 4. 本地查询，不消耗积分
-uv run python -c "
-from zer0share import pro_api
-pro = pro_api()
-print(pro.daily(ts_code='000001.SZ', start_date='20240101', end_date='20240131'))
-"
+uv sync --frozen --python 3.12
+cp -n config/settings.example.toml config/settings.toml
+chmod 600 config/settings.toml
 ```
 
-同步顺序、逐表命令和定时调度部署见[同步指南](docs/guides/SYNC_GUIDE.md)。
-
-## 生产部署（Docker）
-
-定时调度推荐用 Docker 常驻运行：镜像只包含代码和锁定的依赖，数据、配置、日志放在宿主机目录（默认 `/data/zer0share-data`，可用环境变量 `ZER0SHARE_DATA_ROOT` 覆盖）并挂载进容器。
-
-```
-/data/zer0share-data/
-├── config/settings.toml   # 只读挂载；路径保持相对写法（data、db/meta.duckdb、logs/pipeline.log）
-├── data/                  # Parquet 数据
-├── db/                    # DuckDB 元数据 + digest_state.json（每日汇总状态）
-├── logs/
-└── reports/               # 数据质检报告
-```
-
-```bash
-deploy/deploy.sh                       # 用当前 git HEAD 构建镜像（tag = 日期-短 hash）并更新容器
-deploy/deploy.sh 20261107-48e1312      # 回滚到已有镜像
-docker logs -f zer0share-scheduler     # 查看调度日志
-docker exec zer0share-scheduler python main.py status   # 在生产容器里执行 CLI
-```
-
-开发与生产分离：在仓库里改代码、跑测试不会影响正在运行的调度；提交后执行 `deploy/deploy.sh` 才会上线（有未提交的代码改动时脚本会拒绝部署）。开发时如需调试同步逻辑，请把 `settings.toml` 的 `data_dir` 指向单独的测试目录，避免写入生产数据。
-
-完整说明（含旧的 systemd 方式）见[同步指南的部署章节](docs/guides/SYNC_GUIDE.md#docker-部署推荐服务器常驻)。
-
-## 本地查询 API
-
-同步完成后，用类似 Tushare Pro 的接口查询本地数据：
+在配置的 `[tushare]` 中填写自己的 Token，或设置 `TUSHARE_TOKEN` 环境变量。没有配置文件时也可以直接使用环境变量；缓存默认保存到当前目录下的 `data/cache.duckdb`。
 
 ```python
 from zer0share import pro_api
 
 pro = pro_api()
+prices = pro.daily(
+    ts_code="600519.SH",
+    start_date="20260101",
+    end_date="20260131",
+    fields="ts_code,trade_date,close,vol",
+)
 
-daily = pro.daily(ts_code="000001.SZ", start_date="20240101", end_date="20240331")
-qfq = pro.pro_bar(ts_code="000001.SZ", start_date="20240101", end_date="20240331", adj="qfq")
-hs300 = pro.index_weight(index_code="399300.SZ", start_date="20240101", end_date="20240131")
-pool = pro.universe("univ_trade_hs300", trade_date="20240131")
-fut_bar = pro.fut_daily(ts_code="RB2410.SHFE", start_date="20240101", end_date="20240331")
-opt_bar = pro.opt_daily(ts_code="10004462.SH", start_date="20240101", end_date="20240131")
+# 完整命中时不会请求 Tushare。
+same_prices = pro.daily(
+    ts_code="600519.SH",
+    start_date="20260101",
+    end_date="20260131",
+    fields="ts_code,trade_date,close,vol",
+)
+
+# 仅补齐 2 月缺失部分。
+more_prices = pro.daily(
+    ts_code="600519.SH",
+    start_date="20260101",
+    end_date="20260228",
+)
 ```
 
-全部 30+ 个查询方法、完整示例和冒烟测试见[本地查询 API 文档](docs/guides/query-api.md)。
+也支持 `pro_api(token=..., cache_path=...)` 和指定配置文件 `pro_api("config/settings.toml")`。Token 仅在缓存缺失时需要，完整缓存可离线读取。
 
-仓库还内置 AI Skill（`skills/zer0share-data`），支持让 Codex、Claude Code 等智能体把中文自然语言数据请求转成本地查询流程。
+## 支持接口
 
-## CLI 命令一览
+| 接口 | 查询范围 |
+|---|---|
+| `daily` | 单只或少量 A 股的未复权日线 |
+| `adj_factor` | 复权因子 |
+| `daily_basic` | 每日指标 |
+| `stock_basic` | 指定股票的基础信息快照 |
+| `trade_cal` | 指定交易所及日期区间的日历 |
+| `stk_limit` | 指定股票的每日涨跌停价格 |
+| `stock_st` | 指定股票的特别处理记录 |
+| `suspend_d` | 指定股票的停复牌记录 |
+| `pro_bar` | 从缓存日线计算不复权、前复权或后复权行情、均线和指标 |
 
-| 命令 | 说明 |
-|------|------|
-| `sync --table <name>` | 增量同步单个表（全部 30+ 个表见[同步指南](docs/guides/SYNC_GUIDE.md)） |
-| `sync --all` | 按顺序同步全部 |
-| `sync --stock` / `--etf` / `--futures` / `--options` | 按专题分组同步 |
-| `sync --ricequant` | 同步 RiceQuant 分钟线（可选，需 RiceQuant 账号） |
-| `news sync --api major_news\|news --start-date <YYYYMMDD> [--src ...]` | 同步新闻到 `data/news/news.db`（原始返回归档在 `data/news/raw/`），已完成的日期自动跳过 |
-| `build-universe [--date / --start-date / --end-date]` | 构建股票池（详见[股票池文档](docs/guides/universe.md)） |
-| `status` | 查看各表最后同步时间 |
-| `quality check [--all / --market / --table]` | 本地数据质检，报告写入 `reports/quality/` |
-| `scheduler start` | 启动定时调度 |
+行情和股票基础信息必须提供具体 `ts_code`，支持逗号分隔字符串或列表，每次默认最多 20 只。行情必须提供 `trade_date` 或 `start_date`；省略 `end_date` 时使用上海时区的今天。禁止隐式全市场请求、隐式全历史请求和未来行情日期。
 
-所有命令通过 `uv run python main.py <命令>` 执行，加 `--help` 查看完整参数。
+`fields` 只裁剪返回列；内部缓存每个适配接口的固定字段集合。行情结果按日期倒序、代码升序返回，`limit` 和 `offset` 在本地完整缓存结果上分页。尚未适配的接口明确抛出 `NotImplementedError`，不会偷偷触发全量下载或回退到旧数据。
 
-## 项目结构
+完整参数见 [查询 API](docs/guides/query-api.md)。
 
-```
-zer0share/
-├── main.py           # CLI 入口
-├── zer0share/
-│   ├── api.py        # 本地 Tushare-like 查询 API
-│   ├── catalog.py    # 本地表结构、路径和查询规格
-│   ├── cli.py        # Click CLI 实现
-│   ├── pipeline.py   # 同步任务编排
-│   ├── sources/      # 数据源封装（Tushare、RiceQuant）
-│   ├── sync/         # 各专题同步任务
-│   ├── query/        # 本地查询实现
-│   ├── news/         # 新闻同步（JSONL 归档 + SQLite）
-│   ├── quality/      # 数据质检
-│   ├── universe.py   # 股票池构建
-│   ├── scheduler.py  # APScheduler 定时任务
-│   ├── notifier.py   # 企业微信 / 飞书告警
-│   ├── digest.py     # 定时任务成功消息的每日汇总
-│   └── storage.py    # Parquet 读写 + DuckDB MetaStore
-├── config/           # settings.example.toml
-├── deploy/           # Docker 镜像、compose、发布脚本（systemd/ 为旧方案）
-├── docs/
-│   ├── guides/       # 使用文档
-│   ├── dev/          # 开发笔记、设计与实施计划
-│   └── reports/      # 数据质检等报告
-├── examples/         # 按专题分类的本地查询冒烟测试
-├── scripts/          # 一次性运维与数据校验脚本
-├── skills/           # zer0share-data AI Skill
-└── tests/            # pytest 测试套件
+业务代码可使用项目内的 Tushare 风格入口：
+
+```python
+from zer0share import tushare as ts
+
+pro = ts.pro_api(config_path="config/settings.toml")
+bars = ts.pro_bar(
+    ts_code="000001.SZ", api=pro, start_date="20260101", end_date="20260131",
+    adj="qfq", ma=[5, 10], factors=["tor", "vr"],
+)
 ```
 
-## 文档
+这需要显式修改业务代码的 import，并不替换系统安装的 `tushare` 包。`pro_bar` 当前限单只 A 股、日频，复用 `daily`、`adj_factor` 和按需获取的 `daily_basic`；前复权基准取请求区间内最新因子，均线仅使用请求区间内数据。示例见 `examples/tushare_cached.py`。
 
-- [同步指南](docs/guides/SYNC_GUIDE.md)：积分要求、全部同步表、首次同步顺序和定时调度部署
-- [本地查询 API](docs/guides/query-api.md)：全部查询方法、完整示例和冒烟测试
-- [股票池构建](docs/guides/universe.md)：6 个股票池的定义和过滤规则
-- [数据存储结构](docs/guides/storage.md)：Parquet 分区布局和 DuckDB 元数据
-- [examples/README.md](examples/README.md)：示例脚本清单和默认参数
-- [RiceQuant 分钟线](docs/guides/ricequant.md)：可选分钟线数据源的配置、同步和查询
-- [开发笔记](docs/dev/devlog.md)：记录设计过程和踩坑的系列文章目录
+## 缓存与刷新
 
-## 开发
+- 较早历史数据和历史空结果长期保留；最近 7 个自然日的数据和空结果默认 5 分钟后过期。
+- 股票基础信息默认缓存 24 小时。
+- `refresh=True` 重新获取本次请求区间并替换对应记录，可用于历史数据修订。
+- 仅成功且字段完整的响应会写入覆盖记录；异常、权限错误和错误响应不会被记成缓存命中。
+- 单股票区间拆分为最多 366 个自然日的请求，覆盖元数据按接口、股票、区间独立记录。
+- 同一缓存库的远程请求默认至少间隔 1.3 秒，可根据账户权限调整；其他程序或其他缓存库的请求不计入该限流。
+- 数据和覆盖记录在同一事务内更新。Mac/Linux 本地文件锁防止多个进程重复回填同一缓存；同一数据库内请求串行执行，等待超时会明确报错。
+
+近期过期数据只会在下次请求时刷新，没有定时任务。历史修订也不会自动扫描，需要显式刷新。成功的历史空结果表示接口当时未提供记录，并不能证明该日期必然无交易。
+
+参数可在 `[cache]` 中调整，见 [配置示例](config/settings.example.toml)。
+
+也可在 `[cache.policies.daily]` 等接口表中分别设置 `historical_ttl_seconds`、`recent_ttl_seconds` 和 `empty_ttl_seconds`；`stock_basic` 使用 `snapshot_ttl_seconds`。历史 TTL 未配置时长期保留；空结果 TTL 如配置则取更短有效期。`pro_bar` 使用各基础接口的策略。
+
+## 命令行
 
 ```bash
-uv sync --dev
-uv run pytest                          # 运行测试
-uv run pytest tests/test_pipeline.py -v  # 运行单个测试文件
+uv run python main.py query daily \
+  --params '{"ts_code":"600519.SH","start_date":"20260101","end_date":"20260131"}'
+
+uv run python main.py query daily \
+  --params '{"ts_code":"600519.SH","trade_date":"20260105"}' --refresh
+
+uv run python main.py cache-status
+uv run python main.py cache-clear --api daily
+uv run python main.py cache-metrics
+uv run python main.py cache-clear --api daily --ts-code 000001.SZ \
+  --start-date 20260105 --end-date 20260109
+uv run python main.py cache-backup backups/cache.duckdb
+uv run python main.py cache-import --source /path/to/old/data \
+  --api daily --ts-code 000001.SZ --start-date 20260101 --end-date 20260131
 ```
 
-## 交流
+`cache-clear` 默认需要确认，脚本调用可加 `--yes`；不传任何范围参数时清除全部缓存。可按接口、单只股票和日期区间清理；快照不适用日期区间。清理保留累计指标。`cache-metrics` 返回各接口命中率、远程调用/错误次数及数据库大小；完整命中率不包含部分命中。备份在缓存锁内执行检查点后复制，拒绝覆盖已有文件。维护命令不访问 Tushare。指定配置文件使用 `python main.py --config PATH query ...`。
 
-我持续记录这个项目的设计过程、踩坑记录和后续扩展：
+## 旧版迁移
 
-- [开发笔记目录](docs/dev/devlog.md)：所有文章的索引，跟踪开发进度从这里开始
-- 微信公众号「极客投研笔记」：同步更新，欢迎关注
+这是从全量采集管道到请求缓存的接口变更：
 
-如果你对 AI + 量化投研、本地量化数据系统、因子研究工作流感兴趣，欢迎交流。
+- 已移除 `scheduler start`、`sync --all` 等旧 CLI、APScheduler 依赖和常驻容器/systemd 部署。
+- 旧 Parquet 文件没有覆盖范围证据，不会自动导入缓存或冒充完整命中。
+- `cache-import` 可显式导入指定股票、接口和日期范围的现有分区；只认证实际存在且通过校验的非空股票日期，缺失分区和空分区下次仍请求 Tushare。已有缓存覆盖优先保留。
+- 需要读已有 Parquet 时，显式使用 `LocalPro("/path/to/old/data")`，或使用旧配置调用 `local_api(...)`。旧的查询、质检、新闻和 RiceQuant 库代码保留用于现有数据；它们尚未接入请求缓存。
+- 旧离线示例保留在 `examples/`，已显式切换为 `local_api()`；新示例是 `examples/request_cache.py`。
+- `docs/dev/` 中旧设计和 `docs/reports/` 中旧报告为历史资料，不是当前操作说明。
 
-## 免责声明
+安装了旧后台服务的环境需要先自行停止并移除旧服务；新版本不会自动修改系统服务。本次本机此前没有启用该服务。
 
-本项目仅用于研究和工程实验，不构成任何投资建议。数据来自 Tushare Pro，使用请遵守其服务条款。
+## 验证
 
-## License
+```bash
+uv run python -m pytest -q
+```
 
-MIT。详见 [LICENSE](LICENSE)。
+新缓存测试使用可控的数据源替身，覆盖缓存命中、缺口补齐、过期、空结果、刷新、事务回滚、线程和进程并发。真实接口仍需要自己的 Token 和对应权限；缓存缺失的请求会使用账户接口频次。
+
+存储与备份细节见 [存储说明](docs/guides/storage.md)。

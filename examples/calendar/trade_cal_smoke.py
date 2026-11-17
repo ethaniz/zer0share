@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from zer0share import pro_api
+from zer0share import local_api as pro_api
 
 FIELDS = "exchange,cal_date,is_open,pretrade_date"
 ALL_EXCHANGES = ["SSE", "SZSE", "CFFEX", "DCE", "SHFE", "CZCE", "INE", "GFEX"]

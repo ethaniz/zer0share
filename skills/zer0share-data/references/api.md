@@ -1,20 +1,25 @@
-# zer0share Local Query API
+# Historical Parquet Query API
 
-This reference lists the local Tushare-like interfaces exposed by `zer0share.pro_api()`.
+This reference describes the retained offline `LocalPro(data_dir)` interface, not
+the default request cache. For the maintained `pro_api()` cache interfaces, see
+`../../../docs/guides/query-api.md`. Historical “sync table” labels below identify
+old Parquet layouts; the old sync CLI has been removed.
 
 All date strings use `YYYYMMDD`. Common optional parameters are `fields`, `limit`, and `offset` unless noted.
 
 ## Entry Points
 
 ```python
-from zer0share import pro_api
+from zer0share import local_api as pro_api
 
 pro = pro_api()
 df = pro.daily(ts_code="000001.SZ", start_date="20240101", end_date="20240131")
 df = pro.query("daily", ts_code="000001.SZ", start_date="20240101", end_date="20240131")
 ```
 
-`pro_api(config_path="config/settings.toml")` loads `data_dir` from the zer0share config.
+The `local_api` alias above loads `data_dir` from a legacy configuration with
+`[paths]` and `[notifier]`; the new cache-only configuration does not describe
+an old Parquet dataset. `LocalPro("/path/to/data")` bypasses that config loader.
 
 ## Calendar
 

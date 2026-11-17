@@ -16,7 +16,7 @@ import sys
 
 import duckdb
 
-from zer0share import pro_api
+from zer0share import local_api as pro_api
 from zer0share.config import load_config
 
 REQUIRED_COLS = {"ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"}

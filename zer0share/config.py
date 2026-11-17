@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-import re
 import tomllib
 
 
@@ -38,8 +37,6 @@ class NotifierConfig:
     enabled: bool
     wecom: WeComNotifierConfig
     feishu: FeishuNotifierConfig
-    # 成功消息每天汇总一次推送的时间（HH:MM）；空字符串表示每次成功都立即推送
-    digest_time: str = "18:10"
 
 
 @dataclass(frozen=True)
@@ -76,7 +73,6 @@ class Config:
     data_dir: Path
     db_path: Path
     log_path: Path
-    schedule: dict[str, str]  # table_name → "HH:MM"
     wecom_webhook_url: str
     notifier_enabled: bool
     notifier: NotifierConfig
@@ -137,19 +133,6 @@ def _parse_ricequant(raw: dict) -> RiceQuantConfig:
     )
 
 
-def _parse_schedule(raw_scheduler: dict) -> dict[str, str]:
-    schedule = {}
-    pattern = re.compile(r"^\d{1,2}:\d{2}$")
-    for table, time_str in raw_scheduler.items():
-        if not isinstance(time_str, str) or not pattern.match(time_str):
-            raise ValueError(f"调度时间格式错误 ({table}): 期望 'HH:MM', 得到 {time_str!r}")
-        hour, minute = int(time_str.split(":")[0]), int(time_str.split(":")[1])
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            raise ValueError(f"调度时间格式错误 ({table}): 期望 'HH:MM', 得到 {time_str!r}")
-        schedule[table] = time_str
-    return schedule
-
-
 def _parse_notifier(raw: dict) -> NotifierConfig:
     raw_notifier = raw.get("notifier", {})
     enabled = bool(raw_notifier.get("enabled", False))
@@ -170,21 +153,7 @@ def _parse_notifier(raw: dict) -> NotifierConfig:
             enabled=bool(raw_feishu.get("enabled", enabled and bool(feishu_url))),
             webhook_url=feishu_url,
         ),
-        digest_time=_parse_digest_time(raw_notifier.get("digest_time", "18:10")),
     )
-
-
-def _parse_digest_time(value) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    try:
-        hour, minute = (int(x) for x in text.split(":"))
-    except ValueError:
-        raise ValueError(f"notifier.digest_time 格式错误: 期望 'HH:MM', 得到 {value!r}") from None
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ValueError(f"notifier.digest_time 格式错误: 期望 'HH:MM', 得到 {value!r}")
-    return text
 
 
 def _parse_quality(raw_quality: dict | None) -> QualityConfig:
@@ -221,7 +190,6 @@ def load_config(path: Path = Path("config/settings.toml")) -> Config:
             data_dir=Path(raw["paths"]["data_dir"]),
             db_path=Path(raw["paths"]["db_path"]),
             log_path=Path(raw["paths"]["log_path"]),
-            schedule=_parse_schedule(raw["scheduler"]),
             wecom_webhook_url=wecom_webhook_url,
             notifier_enabled=notifier_enabled,
             notifier=notifier,

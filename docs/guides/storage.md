@@ -1,91 +1,37 @@
-# 数据存储结构
+# 请求缓存存储
 
-目录按 Tushare 数据分类命名：`stock/`（股票数据）、`etf/`（ETF专题）、`index/`（指数专题）、`futures/`（期货数据）、`options/`（期权数据）。数据以 Parquet 分区文件存储，元数据（同步记录、交易日历索引）在 DuckDB。
+新缓存默认使用 `data/cache.duckdb`，可通过 `[cache].path` 或 `pro_api(cache_path=...)` 修改。路径相对进程当前工作目录解析，长时间使用建议配置绝对路径。
 
-```
-data/
-├── stock/                              # 股票数据
-│   ├── trade_cal/
-│   │   ├── exchange=SSE/data.parquet
-│   │   ├── exchange=SZSE/data.parquet
-│   │   ├── exchange=CFFEX/data.parquet
-│   │   ├── exchange=SHFE/data.parquet
-│   │   ├── exchange=DCE/data.parquet
-│   │   ├── exchange=CZCE/data.parquet
-│   │   ├── exchange=INE/data.parquet
-│   │   └── exchange=GFEX/data.parquet
-│   ├── basic/
-│   │   └── data.parquet
-│   ├── daily_kline/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── adj_factor/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── daily_basic/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── stock_st/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── suspend_d/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── stk_limit/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── stk_holdertrade/               # 股东增减持，按公告日（含周末）分区
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── industry/
-│   │   ├── sw_classify/data.parquet    # 申万行业分类树
-│   │   ├── sw_member/data.parquet      # 申万股票-行业映射（全量历史）
-│   │   ├── ci_member/data.parquet      # 中信股票-行业映射（全量历史）
-│   │   └── sw_daily/
-│   │       └── date=YYYYMMDD/data.parquet  # 申万行业指数日线
-│   └── universe/
-│       ├── name=univ_research_base/date=YYYYMMDD/data.parquet
-│       ├── name=univ_trade_base/date=YYYYMMDD/data.parquet
-│       ├── name=univ_trade_hs300/date=YYYYMMDD/data.parquet
-│       ├── name=univ_trade_zz500/date=YYYYMMDD/data.parquet
-│       ├── name=univ_trade_zz1000/date=YYYYMMDD/data.parquet
-│       └── name=univ_trade_smallcap/date=YYYYMMDD/data.parquet
-├── etf/                                # ETF专题
-│   ├── etf_basic/
-│   │   └── data.parquet
-│   ├── etf_index/
-│   │   └── data.parquet
-│   ├── fund_daily/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── fund_adj/
-│   │   └── date=YYYYMMDD/data.parquet
-│   ├── etf_share_size/
-│   │   └── date=YYYYMMDD/data.parquet
-│   └── etf_sh_cons/
-│       └── date=YYYYMMDD/data.parquet
-├── index/                              # 指数专题
-│   ├── index_daily/
-│   │   └── date=YYYYMMDD/data.parquet  # 含当日全部12个宽基指数
-│   ├── index_weight/
-│   │   └── index_code=*/date=YYYYMMDD/data.parquet
-│   └── idx_anns/
-│       └── date=YYYYMMDD/data.parquet  # 指数公告
-├── futures/                            # 期货数据
-│   ├── fut_basic/data.parquet          # 全量，每次覆盖
-│   ├── fut_daily/date=YYYYMMDD/data.parquet
-│   ├── fut_holding/date=YYYYMMDD/data.parquet
-│   ├── fut_wsr/date=YYYYMMDD/data.parquet
-│   ├── fut_settle/date=YYYYMMDD/data.parquet
-│   ├── fut_mapping/date=YYYYMMDD/data.parquet
-│   ├── ft_limit/date=YYYYMMDD/data.parquet
-│   ├── fut_weekly/date=YYYYMMDD/data.parquet
-│   ├── fut_monthly/date=YYYYMMDD/data.parquet
-│   ├── fut_index_daily/date=YYYYMMDD/data.parquet
-│   └── fut_weekly_detail/date=YYYYMMDD/data.parquet
-├── options/                            # 期权数据
-│   ├── opt_basic/data.parquet          # 全量，每次覆盖
-│   └── opt_daily/date=YYYYMMDD/data.parquet
-├── ricequant/                          # RiceQuant 分钟线（可选数据源）
-│   ├── basic/data.parquet
-│   ├── stock_minute/date=YYYYMMDD/data.parquet
-│   ├── etf_basic/data.parquet
-│   └── etf_minute/date=YYYYMMDD/data.parquet
-└── news/                               # 新闻（可选，不用 Parquet 分区）
-    ├── news.db                         # SQLite 主库：去重、正文修订记录、抓取日志、标题全文索引
-    └── raw/{api}/{src}/YYYYMMDD.jsonl.gz  # 接口原始返回，只追加，主库损坏时可重建
-db/
-└── meta.duckdb                         # 同步记录 + 交易日历索引
-```
+## 数据表
+
+| 表 | 内容 |
+|---|---|
+| `cache_schema` | 当前缓存结构版本；不兼容版本直接报错 |
+| `cache_rows` | 接口、请求范围标识、记录日期和 JSON 行内容 |
+| `cache_coverage` | 接口、请求范围标识、起止日期和过期时间 |
+| `cache_state` | 同一数据库内最近一次远程请求时间，用于限流 |
+| `cache_metrics` | 各接口累计完整/部分命中、缺失、远程调用与错误、写入行数、空响应数 |
+
+行情的范围标识是证券代码，日历是交易所，股票基础信息是规范化后的代码及过滤参数。结构版本为 2，行主键为接口、范围标识、日期和 `record_key`；普通日行情和快照使用空记录键，事件接口使用事件类型等字段区分同日多条记录。快照使用空日期。同一接口的固定字段整体缓存，读取时裁剪字段和分页。版本 1 在首次打开时事务升级，保留数据和覆盖记录；未知版本拒绝打开。
+
+使用 DuckDB 内的 JSON 行是为了在少量股票场景中统一保存不同接口字段、原子更新局部区间。它不是针对全市场高吞吐列式分析的设计。后续大量数据分析或 Parquet 导出可独立扩展。
+
+## 完整性
+
+成功获取一个区间后，在同一个事务中替换该区间数据并写入覆盖记录；写入失败则一起回滚。覆盖记录包含成功空结果，不能以“有多少交易行”推断某日期范围是否完整。
+
+同一请求的缺失范围拆分为至多 366 个自然日的分块；近期和历史边界也会拆开，以分别记录有效期。一个请求中某分块失败不会删除其他已完成分块。
+
+## 并发与备份
+
+同路径客户端使用线程锁和数据库旁的 `.lock` 文件；文件锁覆盖查覆盖、远程获取和入库全过程。支持 macOS/Linux 本地磁盘，数据库内操作保守串行。不要绕过锁直接写数据库，也不保证网络共享盘或 Windows 的锁行为。
+
+进程退出后文件锁自动释放，`.lock` 文件存在不代表仍有进程运行。DuckDB 连接在每次操作结束后关闭。
+
+使用 `python main.py cache-backup backups/cache.duckdb` 或 `pro.store.backup(path)`。备份持有同一缓存锁，执行 `CHECKPOINT` 后复制到目标目录的临时文件，完成后原子创建目标文件，拒绝覆盖。备份中不包含配置文件。恢复时停止客户端，把备份复制到配置的缓存路径，再启动调用；不要在活动数据库上直接覆盖文件，也不要混用旧 WAL。配置文件包含凭证时需单独保护。旧 `db/meta.duckdb` 与新缓存数据库用途不同，不能相互替代。
+
+## 旧数据
+
+旧 Parquet 目录、元数据和质检库代码保留用于读取已有数据，但不自动导入新缓存。旧同步断点仅表示最后处理日期，不能证明“某股票某区间已经完整覆盖”。
+
+使用 `cache-import --source /old/data --api daily --ts-code 000001.SZ --start-date 20260101 --end-date 20260131` 显式迁移。支持六个股票日期接口（含停复牌、特别处理和涨跌停），按旧 `stock/<table>/date=YYYYMMDD/data.parquet` 读取，仅导入选定股票。字段、股票和日期先校验；缺失分区和空股票日期不写覆盖，已有覆盖不替换。报告中 `imported_dates`、`empty_dates`、`existing_dates` 按股票日期计数，`missing_partitions` 按缺失分区计数。导入不访问 Tushare；后续请求只补缺口。基础信息和日历不在此迁移工具范围内。

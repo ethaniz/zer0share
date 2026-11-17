@@ -1,175 +1,117 @@
-# 本地查询 API
+# 请求缓存 API
 
-同步完成后，可以在研究代码中使用类似 Tushare Pro 的本地 Python API 查询数据。查询只读取本地 Parquet 文件，通过 DuckDB 执行，不会访问 Tushare，也不会消耗积分。
-
-## 使用示例
+## 创建客户端
 
 ```python
 from zer0share import pro_api
 
 pro = pro_api()
-
-# 股票
-basic = pro.stock_basic(list_status="L")
-cal = pro.trade_cal(exchange="SSE", start_date="20240101", end_date="20240131")
-daily = pro.daily(ts_code="000001.SZ", start_date="20240101", end_date="20240331")
-adj = pro.adj_factor(ts_code="000001.SZ", start_date="20240101", end_date="20240331")
-daily_basic = pro.daily_basic(trade_date="20240131", fields="ts_code,trade_date,total_mv")
-st = pro.stock_st(trade_date="20240131")
-suspend = pro.suspend_d(trade_date="20240131")
-limit = pro.stk_limit(trade_date="20240131")
-
-# 复权行情
-qfq = pro.pro_bar(
-    ts_code="000001.SZ",
-    start_date="20240101",
-    end_date="20240331",
-    adj="qfq",
-)
-
-# 指数
-hs300 = pro.index_weight(index_code="399300.SZ", start_date="20240101", end_date="20240131")
-idx_daily = pro.index_daily(ts_code="000300.SH", start_date="20240101", end_date="20240131")
-idx_anns = pro.idx_anns(
-    src="中证指数",
-    start_date="20260401",
-    end_date="20260430",
-    fields="ann_date,title,source,type",
-)
-
-# 行业（用于行业中性化）
-sw_industries = pro.index_classify(level="L1", src="SW2021")       # 申万一级行业列表
-sw_member = pro.index_member_all(ts_code="000001.SZ", is_new="Y")  # 查股票所属申万行业
-ci_member = pro.ci_index_member(ts_code="000001.SZ", is_new="Y")   # 查股票所属中信行业
-sw_daily = pro.sw_daily(trade_date="20240131")                     # 申万行业指数日线
-
-# 股票池
-pool = pro.universe("univ_trade_hs300", trade_date="20240131")     # 某日沪深300交易池
-
-# ETF
-etf_basic = pro.etf_basic(list_status="L", exchange="SH")
-etf_index = pro.etf_index(ts_code="000300.SH")
-fund_daily = pro.fund_daily(
-    ts_code="510330.SH",
-    start_date="20250101",
-    end_date="20250618",
-    fields="trade_date,open,high,low,close,vol,amount",
-)
-fund_adj = pro.fund_adj(
-    ts_code="513100.SH",
-    start_date="20190101",
-    end_date="20190926",
-    fields="ts_code,trade_date,adj_factor,discount_rate",
-)
-etf_share_size = pro.etf_share_size(
-    ts_code="510330.SH",
-    start_date="20250101",
-    end_date="20251224",
-    fields="trade_date,ts_code,etf_name,total_share,total_size,exchange",
-)
-etf_sh_cons = pro.etf_sh_cons(
-    trade_date="20260615",
-    ts_code="517030.SH",
-    fields="trade_date,ts_code,con_code,con_name,qty,sub_flag,cpr,rdr,sca,exchange",
-)
-
-# 期货
-fut_contracts = pro.fut_basic(exchange="SHFE")                                    # 上期所合约列表
-fut_bar = pro.fut_daily(ts_code="RB2410.SHFE", start_date="20240101", end_date="20240331")
-fut_holding = pro.fut_holding(trade_date="20240131", exchange="SHFE")             # 某日持仓排名
-fut_mapping = pro.fut_mapping(ts_code="RB.SHFE", start_date="20240101", end_date="20240331")  # 主连映射
-fut_weekly = pro.fut_weekly(ts_code="RB2501.SHFE", start_date="20240101", end_date="20240331")
-
-# 期权
-opt_contracts = pro.opt_basic(exchange="SSE", call_put="C")           # 上交所认购合约列表
-opt_bar = pro.opt_daily(ts_code="10004462.SH", start_date="20240101", end_date="20240131")
-opt_snapshot = pro.opt_daily(trade_date="20240102", exchange="SSE")   # 某日全部上交所期权行情
-
-# 新闻（需先运行 news sync，存于 SQLite）
-major = pro.major_news(start_date="20250324", end_date="20250324", src="新华网")
-flash = pro.news(start_date="20250324", end_date="20250324", keyword="降准")   # 按标题全文检索，至少 3 个字
+pro = pro_api("config/settings.toml")
+pro = pro_api(token="自己的 Token", cache_path="/path/to/cache.duckdb")
 ```
 
-## 支持的本地查询方法
+优先级为显式 `token` 参数、配置文件中非空 Token、`TUSHARE_TOKEN` 环境变量。默认尝试当前工作目录的 `config/settings.toml`；不存在时使用环境变量和默认缓存配置。显式指定的配置文件不存在时直接报错。
 
-| 方法 | 说明 |
-|------|------|
-| `stock_basic` | 查询已同步的股票基础信息 |
-| `trade_cal` | 查询已同步的交易日历 |
-| `daily` | 查询已同步的 A 股日线行情 |
-| `adj_factor` | 查询已同步的复权因子 |
-| `daily_basic` | 查询已同步的每日指标 |
-| `stock_st` | 查询已同步的每日 ST 股票列表 |
-| `suspend_d` | 查询已同步的每日停复牌信息 |
-| `stk_limit` | 查询已同步的每日涨跌停价格 |
-| `stk_holdertrade` | 查询已同步的股东增减持（按 `ann_date` 分区；`holder_type` C 公司 / P 个人 / G 高管，`trade_type` IN 增持 / DE 减持） |
-| `index_weight` | 查询已同步的指数成分和权重 |
-| `index_daily` | 查询已同步的宽基指数日线行情（12个指数） |
-| `idx_anns` | 查询已同步的指数公司公告（按 `ann_date` 分区） |
-| `index_classify` | 查询申万行业分类树（L1/L2/L3） |
-| `index_member_all` | 查询申万股票-行业映射（支持历史变更） |
-| `ci_index_member` | 查询中信股票-行业映射（支持历史变更） |
-| `sw_daily` | 查询已同步的申万行业指数日线行情 |
-| `etf_basic` | 查询已同步的 ETF 基础信息 |
-| `etf_index` | 查询已同步的 ETF 基准指数列表 |
-| `fund_daily` | 查询已同步的 ETF 日线行情 |
-| `fund_adj` | 查询已同步的基金复权因子 |
-| `etf_share_size` | 查询已同步的 ETF 份额规模 |
-| `etf_sh_cons` | 查询已同步的上交所 ETF 每日持仓组合 |
-| `pro_bar` | 查询本地 A 股日线行情，支持不复权、前复权（qfq）和后复权（hfq） |
-| `universe` | 查询已构建的股票池（支持按池名称、ts_code、日期过滤） |
-| `fut_basic` | 查询已同步的期货合约基础信息（支持按交易所、fut_code 过滤） |
-| `fut_daily` | 查询已同步的期货日线行情 |
-| `fut_holding` | 查询已同步的期货持仓排名 |
-| `fut_wsr` | 查询已同步的期货仓单日报 |
-| `fut_settle` | 查询已同步的期货结算参数 |
-| `fut_mapping` | 查询已同步的期货主力与连续合约映射 |
-| `ft_limit` | 查询已同步的期货涨跌停价格 |
-| `fut_weekly` | 查询已同步的期货周线行情 |
-| `fut_monthly` | 查询已同步的期货月线行情 |
-| `fut_index_daily` | 查询已同步的期货指数日线行情 |
-| `fut_weekly_detail` | 查询已同步的期货交易所周度明细 |
-| `opt_basic` | 查询已同步的期权合约基础信息（支持按交易所、call_put、opt_code 过滤） |
-| `opt_daily` | 查询已同步的期权日线行情（支持按交易所过滤） |
-| `major_news` | 查询已同步的长篇通讯（SQLite；北京时间日期含两端；`src` 过滤来源，`keyword` 按标题全文检索，至少 3 个字；`content` 仅在同步时开启 `--with-content` 才有） |
-| `news` | 查询已同步的新闻快讯（参数同 `major_news`；很多快讯标题为空，正文在 `content`） |
-| `query` | 按接口名分发，例如 `pro.query("daily", ...)` |
+缓存文件、覆盖信息和限流时间均持久化。客户端不持有长期数据库连接，无需手动关闭。库不启动任何后台线程或调度器。
 
-## AI Skill
+## 行情接口
 
-仓库内置 AI Skill：`skills/zer0share-data`。支持让 Codex、Claude Code、OpenClaw 等智能体把中文自然语言数据请求转成 `zer0share` 本地查询流程。
+`daily`、`adj_factor`、`daily_basic`、`stk_limit`、`stock_st` 参数一致：
 
-## 冒烟测试
-
-完整示例清单和默认参数见 [examples/README.md](../../examples/README.md)。
-
-```bash
-# 股票示例
-uv run python examples/stock/basic_query_smoke.py
-uv run python examples/stock/daily_query_smoke.py
-uv run python examples/stock/adj_factor_query_smoke.py
-
-# ETF 示例
-uv run python examples/etf/etf_basic_query_smoke.py
-uv run python examples/etf/etf_index_query_smoke.py
-uv run python examples/etf/fund_daily_query_smoke.py
-uv run python examples/etf/etf_share_size_query_smoke.py
-uv run python examples/etf/etf_sh_cons_query_smoke.py
-
-# 指数示例
-uv run python examples/index/index_daily_query_smoke.py
-uv run python examples/index/index_weight_query_smoke.py
-uv run python examples/index/idx_anns_query_smoke.py
-
-# 期货示例
-uv run python examples/futures/fut_basic_query_smoke.py
-uv run python examples/futures/fut_daily_query_smoke.py
-uv run python examples/futures/fut_holding_query_smoke.py
-uv run python examples/futures/fut_settle_query_smoke.py
-uv run python examples/futures/fut_weekly_monthly_query_smoke.py
-uv run python examples/futures/ft_limit_query_smoke.py
-
-# 期权示例
-uv run python examples/options/opt_basic_query_smoke.py
-uv run python examples/options/opt_daily_query_smoke.py
+```python
+df = pro.daily(
+    ts_code="600519.SH,601318.SH",
+    start_date="20260101",
+    end_date="20260131",
+    fields="ts_code,trade_date,close",
+    limit=10,
+    offset=0,
+    refresh=False,
+)
 ```
+
+- `ts_code` 必填，可以是逗号分隔字符串或列表，支持 SH/SZ/BJ 后缀；空格、大小写和重复代码会标准化。默认最多 20 只。
+- 日期必须是有效的八位年月日字符串。必须提供 `start_date` 或 `trade_date`，两者不能混用。
+- 提供 `start_date` 时，省略 `end_date` 使用上海时区今天。不能查询未来行情。
+- `trade_date` 只查询一天。
+- `fields` 为逗号分隔字符串或字段列表，只能选择当前适配器固定字段集合内的字段。未知字段提前报错。并非支持上游今后新增的所有字段。
+- `limit` 和 `offset` 为非负整数，仅在本地分页，不会把截断的远程响应当成完整缓存。
+- `refresh=True` 无视当前覆盖记录，重新获取本次股票和日期范围；其他股票及区间不变。
+- 默认返回完整固定字段集合，按交易日期倒序、同日股票代码升序排列。
+
+通过 `pro.query("daily", **params)` 可使用同样的逻辑。
+
+缓存只拉请求中的股票，不会顺带拉取交易日历、基础信息、指数或其他股票。日期拆分后的单次请求最多覆盖 366 个自然日，每次仅一只股票；无需通过全市场扫描获得少量股票。
+
+`suspend_d` 具有同样的股票和日期参数，并支持 `suspend_type="S"`（停牌）或 `"R"`（复牌）；过滤在完整缓存上执行。`stock_st` 和 `suspend_d` 支持远程分页与同日多条事件，重复页会报错而不会记为完整覆盖。
+
+## 复权行情与业务接入
+
+```python
+from zer0share import tushare as ts
+
+pro = ts.pro_api(config_path="config/settings.toml")
+df = ts.pro_bar(
+    ts_code="000001.SZ", api=pro, start_date="20260101", end_date="20260131",
+    adj="qfq", ma=[5, 10], factors=["tor", "vr"], adjfactor=True,
+)
+```
+
+也可调用 `pro.pro_bar(...)` 或 `pro.query("pro_bar", ...)`。限单只 A 股、`asset="E"`、`freq="D"`，`adj` 支持 `None`、`"qfq"` 和 `"hfq"`；同样要求显式日期范围，支持 `trade_date`、`fields`、`limit`、`offset` 和 `refresh`。
+
+先缓存日线，复权时缓存同区间复权因子，`tor`/`vr` 从每日指标取得 `turnover_rate`/`volume_ratio`。派生结果不另行存储；缺少复权因子时报错。前复权以请求区间内最新因子为基准；均线按区间内数据计算，不额外向前拉取，前几行可能为空。分页在复权和均线计算完成后执行。`adjfactor=True` 需要同时指定复权方式。
+
+项目内 `zer0share.tushare.pro_api()` 的首个参数是 Token，配置路径用 `config_path=`；顶层 `zer0share.pro_api()` 首个参数仍为配置路径。两者返回同一种缓存客户端，不修改外部 Tushare 包。
+
+## 接口有效期
+
+在 `[cache.policies.<接口名>]` 配置 `recent_ttl_seconds`、`historical_ttl_seconds`、`empty_ttl_seconds`。未设置的近期策略继承全局配置，未设置的历史 TTL 表示长期保留。空结果 TTL 若设置则取其与正常 TTL 的较小值。快照接口 `stock_basic` 使用 `snapshot_ttl_seconds` 和可选空结果 TTL。派生 `pro_bar` 遵循基础接口策略。有效期为非负秒数，0 表示下次请求即过期。
+
+## 股票基础信息
+
+```python
+df = pro.stock_basic(ts_code="600519.SH", fields="ts_code,name,list_date")
+```
+
+支持 `list_status`（默认 `"L"`）、`exchange`、`market`、`is_hs`、`name` 过滤，以及 `fields`、`limit`、`offset`、`refresh`。`ts_code` 同样必须指定。不同过滤条件的结果分别缓存，默认 24 小时有效。
+
+## 交易日历
+
+```python
+df = pro.trade_cal(
+    exchange="SSE",
+    start_date="20260101",
+    end_date="20260131",
+    is_open=1,
+)
+```
+
+必须明确起始日期，默认交易所为 SSE。只请求该交易所的指定日期范围，不遍历所有交易所。`is_open` 在完整区间缓存上过滤，支持 `0`、`1` 及对应字符串；也支持 `fields`、`limit`、`offset`、`refresh`。
+
+日历允许未来日期；近期和未来日历都采用短有效期，后续请求时可更新。
+
+## 缓存维护
+
+```python
+print(pro.store.status())
+print(pro.store.metrics())
+pro.clear_cache("daily", ts_code="000001.SZ", start_date="20260105", end_date="20260109")
+pro.store.backup("backups/cache.duckdb")
+pro.import_parquet("/path/to/old/data", "daily", "000001.SZ", "20260101", "20260131")
+```
+
+`status()` 返回接口、数据行数、查询范围数量和覆盖区间数；有效期已经过期的条目仍计入已存储统计，查询时会重新检查有效性。空结果也有覆盖记录，因此可能存在零行的接口。
+
+清理会同时移除数据和覆盖记录，并与其他缓存操作互斥；DuckDB 的逻辑删除不保证立即缩小数据库文件。
+
+`clear_cache()` 校验股票及日期参数；清理中间区间会保留两侧覆盖，不触及其他股票。`stock_basic` 不接受日期清理。统计为持久化累计值，清理数据不会重置；`hit_rate` 是完整命中数除以查询数，部分命中单独计数。`pro_bar` 计入其基础接口的查询统计。
+
+## 边界和错误
+
+不支持的接口和动态名称会抛出 `NotImplementedError`。行情请求未指定股票/起始日期、未知字段和错误日期会在访问远程接口前报错。
+
+网络或权限错误向调用者传递，不返回“成功的空缓存”。过期数据更新失败时也报错，不静默返回旧数据。一次大请求的早先成功分块可保留，失败分块没有覆盖记录，下次可接着补齐。
+
+每个响应必须包含固定字段集合，股票和日期必须符合请求；日行情同一股票同日不能重复，事件接口按事件键区分同日记录。`None` 等非 DataFrame 响应不缓存。成功空结果按配置策略缓存；如怀疑上游暂时返回空结果，可使用 `refresh=True`。
+
+默认历史缓存不自动跟踪上游历史修订。`daily` 价格未复权，复权使用 `pro_bar`；当前不支持 ETF、指数、财务、新闻或 RiceQuant 缓存。旧数据只读入口是 `LocalPro(data_dir)`，两种模式的完整性保证不同。

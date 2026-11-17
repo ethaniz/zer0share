@@ -1,4 +1,4 @@
-# zer0share 生产调度镜像：只含代码和依赖，数据 / 配置 / 日志全部从宿主机挂载
+# zer0share 请求缓存 CLI 镜像
 FROM ghcr.io/astral-sh/uv:0.11.1 AS uv
 
 FROM python:3.11-slim
@@ -28,4 +28,5 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 USER 1000:1000
 
-CMD ["python", "main.py", "scheduler", "start"]
+ENTRYPOINT ["python", "main.py"]
+CMD ["--help"]

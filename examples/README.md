@@ -1,6 +1,10 @@
 # Examples
 
-Run these examples from the repository root after syncing local data.
+These are historical offline Parquet examples, retained for existing datasets.
+They use `local_api()` under the old `pro_api` alias and require a legacy
+configuration with `[paths]` and `[notifier]`. They do not use the new cache.
+For request-driven examples, see `request_cache.py` and `tushare_cached.py`
+(Tushare 风格的复权行情示例，使用 `zer0share.tushare` 入口和缓存客户端), plus the project README.
 
 所有脚本只读取本地 Parquet 文件，通过 DuckDB 执行，不访问 Tushare，不消耗积分。
 

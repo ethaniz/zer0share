@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from zer0share import pro_api
+from zer0share import local_api as pro_api
 
 
 FIELDS = "index_code,con_code,trade_date,weight"

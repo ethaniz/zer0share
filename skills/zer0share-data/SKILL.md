@@ -1,110 +1,48 @@
 ---
 name: zer0share-data
-description: 面向中文自然语言的 zer0share 本地金融数据查询技能。用于把股票、ETF、指数、行业、期货、期权、股票池、复权行情等请求转成 zer0share 的 Tushare-like 本地查询流程。适用于已经用 zer0share 同步到本地 Parquet/DuckDB 数据的 A 股、ETF、期货和期权研究场景；查询不访问在线 Tushare，不消耗 Tushare 积分。
+description: 使用 zer0share 的请求缓存查询指定 A 股行情、复权因子、每日指标、股票资料和交易日历；缓存缺失时按当前股票与区间访问 Tushare。已有 Parquet 的只读查询需显式选择 LocalPro。
 ---
 
 # zer0share-data
 
-Use this skill to answer Chinese financial data requests with local zer0share data.
-The query API intentionally looks like Tushare Pro, but the data source is local Parquet files queried through DuckDB.
+Use `from zer0share import pro_api` for the current request cache. A cache miss
+accesses Tushare and requires a token and the account's API permissions; a full
+hit can be read offline. Do not describe the default API as always offline.
 
-## Core Rules
-
-- Use `from zer0share import pro_api` as the default entry point.
-- Do not call online Tushare for query tasks.
-- Do not require `TUSHARE_TOKEN` for local queries.
-- Assume data must already be synced locally. If a table is missing, tell the user which `python main.py sync --table ...` or `python main.py build-universe` command is needed.
-- Use `YYYYMMDD` for `trade_date`, `start_date`, and `end_date`.
-- Do not combine `trade_date` with `start_date` or `end_date`.
-- Prefer small, targeted queries first; add fields and ranges only when needed.
-- Never fabricate missing market, financial, news, macro, or real-time data. zer0share only supports the local interfaces present in the current repository.
-
-## Environment Check
-
-Before running a query, verify the local project can import zer0share:
-
-```bash
-uv run python -c "from zer0share import pro_api; print(type(pro_api()).__name__)"
-```
-
-If this fails, report the import/config error directly. If it succeeds but a query raises `FileNotFoundError`, the data has not been synced yet.
-
-## Basic Query Pattern
+Supported cache interfaces: `daily`, `adj_factor`, `daily_basic`, `stock_basic`,
+`trade_cal`, `stk_limit`, `stock_st`, `suspend_d`, and `pro_bar`.
+Use specific stock codes and explicit date ranges. Dates are
+eight-digit year/month/day strings. Do not combine `trade_date` with date ranges.
+Do not use a missing-data error as a reason to run the removed sync commands.
 
 ```python
 from zer0share import pro_api
 
 pro = pro_api()
-
-df = pro.daily(
-    ts_code="000001.SZ",
-    start_date="20240101",
-    end_date="20240131",
-)
+df = pro.daily(ts_code="600519.SH", start_date="20260101", end_date="20260131")
 ```
 
-For dynamic API names, use:
+Only request symbols and dates needed for the user's question. No market-wide
+or implicit full-history requests are supported. Use `refresh=True` when the
+user requests a refresh; it replaces the requested interval, not other data.
+Historical empty results are cached, while recent empty results expire.
 
-```python
-df = pro.query(
-    "daily",
-    ts_code="000001.SZ",
-    start_date="20240101",
-    end_date="20240131",
-)
-```
+For Tushare-shaped business code, use `from zer0share import tushare as ts`.
+`ts.pro_api(config_path=...)` and `ts.pro_bar(api=client, ...)` use the same cache.
+Daily A-share `pro_bar` derives adjustments, MAs, and optional turnover/volume
+ratios from cached base APIs. It requires one stock and explicit dates; MAs only
+use that interval. There is no monkeypatch of the external Tushare package.
+Per-API TTLs live under `[cache.policies.<api>]`. Maintenance commands include
+`cache-metrics`, `cache-backup`, `cache-import`, and stock/date-scoped `cache-clear`.
 
-The bundled script can run the same pattern from shell:
+Read `../../docs/guides/query-api.md` for current parameters, expiry, errors, and
+unsupported interfaces. Do not infer that every method available in upstream
+Tushare has a cache adapter.
 
-```bash
-uv run python skills/zer0share-data/scripts/query_local.py daily \
-  --params '{"ts_code":"000001.SZ","start_date":"20240101","end_date":"20240131"}' \
-  --head 10
-```
+The bundled `scripts/query_local.py` now uses this same cache. A missing token,
+permission failure, or unsupported interface must be reported without inventing
+data or creating a full sync job.
 
-## Intent Handling
-
-Map user language to local interfaces:
-
-- 股票基础资料: `stock_basic`
-- 交易日历: `trade_cal`
-- 股票行情: `daily`, `pro_bar`, `adj_factor`
-- 估值和每日指标: `daily_basic`
-- ST、停牌、涨跌停: `stock_st`, `suspend_d`, `stk_limit`
-- 指数行情和成分: `index_daily`, `index_weight`
-- ETF: `etf_basic`, `etf_index`, `fund_daily`, `fund_adj`, `etf_share_size`
-- 行业分类和成分: `index_classify`, `index_member_all`, `ci_index_member`
-- 股票池: `universe`
-- 期货: `fut_basic`, `fut_daily`, `fut_holding`, `fut_wsr`, `fut_settle`, `fut_mapping`, `ft_limit`, `fut_weekly`, `fut_monthly`, `fut_index_daily`, `fut_weekly_detail`
-- 期权: `opt_basic`, `opt_daily`
-
-For exact parameters and supported interfaces, read `references/api.md`.
-
-## Defaults
-
-- "最近走势": use the latest locally available 20 trading days if you can infer the available range, otherwise ask for a date range.
-- "这段时间": default to roughly 3 months when a date range is not specified and local data coverage is known.
-- "今年以来": use January 1 of the current year through the latest locally available date.
-- "复权行情": use `pro_bar(..., adj="qfq")` unless the user asks for `hfq` or no adjustment.
-- "行业": prefer Shenwan via `index_classify` / `index_member_all` unless the user asks for China Securities Index via `ci_index_member`.
-
-If the available local data range is unknown, query a small table/date range first or ask for a concrete date range.
-
-## Output Contract
-
-Unless the user asks only for raw data, respond with:
-
-1. One-line conclusion.
-2. Data range and local interface used.
-3. Key table or metrics.
-4. Caveats: missing synced tables, empty results, non-trading days, unsupported interfaces, or local snapshot limitations.
-
-## Empty Result Handling
-
-An empty DataFrame is not automatically an error. Check and explain likely causes:
-
-- table not synced for that date range;
-- non-trading day;
-- stock, futures, or option contract not listed during that period;
-- filters too narrow;
-- requested interface is not implemented by zer0share.
+For explicitly offline access to existing Parquet files, use
+`LocalPro("/path/to/data")`. Read `references/api.md` only for that legacy mode;
+its table identifiers do not imply that the old sync CLI still exists.

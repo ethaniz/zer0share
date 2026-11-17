@@ -25,7 +25,7 @@ enabled = false
 """
 
 
-def test_load_config_returns_schedule_dict(tmp_path):
+def test_load_config_ignores_retired_schedule(tmp_path):
     cfg_file = tmp_path / "settings.toml"
     cfg_file.write_text(VALID_TOML, encoding="utf-8")
 
@@ -33,11 +33,7 @@ def test_load_config_returns_schedule_dict(tmp_path):
 
     assert cfg.tushare_token == "test_token"
     assert cfg.data_dir == Path("data")
-    assert cfg.schedule == {
-        "trade_cal": "09:00",
-        "basic": "09:10",
-        "daily_kline": "16:30",
-    }
+    assert not hasattr(cfg, "schedule")
     assert cfg.wecom_webhook_url == "https://example.com/webhook"
     assert cfg.notifier_enabled is False
     assert cfg.notifier.enabled is False
@@ -174,7 +170,7 @@ def test_load_config_missing_key(tmp_path):
         load_config(cfg_file)
 
 
-def test_load_config_invalid_schedule_format(tmp_path):
+def test_load_config_ignores_retired_schedule_format(tmp_path):
     cfg_file = tmp_path / "settings.toml"
     cfg_file.write_text(
         "[tushare]\n"
@@ -190,11 +186,10 @@ def test_load_config_invalid_schedule_format(tmp_path):
         "enabled=false\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="调度时间格式错误"):
-        load_config(cfg_file)
+    assert not hasattr(load_config(cfg_file), "schedule")
 
 
-def test_load_config_out_of_range_schedule_time(tmp_path):
+def test_load_config_ignores_retired_schedule_time(tmp_path):
     cfg_file = tmp_path / "settings.toml"
     cfg_file.write_text(
         "[tushare]\n"
@@ -210,8 +205,7 @@ def test_load_config_out_of_range_schedule_time(tmp_path):
         "enabled=false\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="调度时间格式错误"):
-        load_config(cfg_file)
+    assert not hasattr(load_config(cfg_file), "schedule")
 
 
 def test_config_is_immutable(tmp_path):
@@ -380,14 +374,13 @@ def test_load_config_keeps_legacy_wecom_webhook_url_compatibility(tmp_path):
     assert cfg.notifier.wecom.webhook_url == "https://example.com/webhook"
 
 
-def test_load_config_digest_time_defaults_and_validates(tmp_path):
+def test_load_config_ignores_retired_digest_time(tmp_path):
     cfg_file = tmp_path / "settings.toml"
     cfg_file.write_text(VALID_TOML, encoding="utf-8")
-    assert load_config(cfg_file).notifier.digest_time == "18:10"
+    assert not hasattr(load_config(cfg_file).notifier, "digest_time")
 
     cfg_file.write_text(VALID_TOML.replace("[notifier]", '[notifier]\ndigest_time = ""'), encoding="utf-8")
-    assert load_config(cfg_file).notifier.digest_time == ""
+    assert not hasattr(load_config(cfg_file).notifier, "digest_time")
 
     cfg_file.write_text(VALID_TOML.replace("[notifier]", '[notifier]\ndigest_time = "25:00"'), encoding="utf-8")
-    with pytest.raises(ValueError, match="digest_time"):
-        load_config(cfg_file)
+    assert not hasattr(load_config(cfg_file).notifier, "digest_time")

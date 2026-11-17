@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a zer0share local pro.query call from the command line."""
+"""Run a request-driven zer0share cached query from the command line."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from zer0share import pro_api
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Query local zer0share data.")
-    parser.add_argument("api_name", help="Local API name, e.g. daily or stock_basic.")
+    parser = argparse.ArgumentParser(description="Query zer0share; fetch only missing data from Tushare.")
+    parser.add_argument("api_name", help="Cached API: daily, adj_factor, daily_basic, stock_basic, trade_cal.")
     parser.add_argument(
         "--params",
         default="{}",
@@ -19,8 +19,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default="config/settings.toml",
-        help="Path to zer0share settings.toml.",
+        default=None,
+        help="Optional path to zer0share settings.toml.",
     )
     parser.add_argument(
         "--head",
